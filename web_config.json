@@ -1,0 +1,10 @@
+{
+  "server": {
+    "port": 8000,
+    "timeout": 60,
+    "allowed_methods": ["GET", "POST", "PUT"],
+    "request_limit": ".[+ 100 200]."
+  }
+}
+
+

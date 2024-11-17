@@ -1,0 +1,12 @@
+{
+  "constants": {
+    "pi": 3.14,
+    "e": 2.71,
+    "sum": ".[+ pi e].",
+    "circle_area": ".[* pi 5 5].",
+    "sorted_numbers": ".[sort [5, 3, 8, 1]]."
+  },
+  "data": {
+    "message": "Hello, JSON!"
+  }
+}

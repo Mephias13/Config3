@@ -1,0 +1,8 @@
+{
+  "constants": {
+    "pi": 3.14,
+    "e": 2.71,
+    "sum": ".[+ pi e].",
+    "sorted_numbers": ".[sort {5, 3, 8, 1}]."
+  }
+}
