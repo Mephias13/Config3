@@ -39,5 +39,4 @@
 ```bash
 python JSONcon.py test
 
-**Работа программы:**
 Для запуска прогррамы введите в командной строке python JSONcon.py < название_вашего_файла.json > output.conf
