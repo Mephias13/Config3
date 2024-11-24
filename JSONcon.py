@@ -3,193 +3,185 @@ import sys
 import re
 import unittest
 
+
 def reformat_expr(expr, constants):
     if expr.startswith("sort "):
         array_expr = expr[5:].strip()
         arr = reformat_operand(array_expr, constants)
         if not isinstance(arr, list):
-            raise ValueError(f"Sort работает только с массивами но получила {type(arr)}.")
+            raise ValueError(f"Sort requires a list, got {type(arr)}.")
         return sorted(arr)
 
     tokens = expr.split()
     operator = tokens[0]
     operands = tokens[1:]
 
+    evaluated_operands = [reformat_operand(op, constants) for op in operands]
+
     if operator == '+':
-        return sum(reformat_operand(op, constants) for op in operands)
+        return sum(evaluated_operands)
     elif operator == '-':
-        if len(operands) == 1:
-            return -reformat_operand(operands[0], constants)
-        return reformat_operand(operands[0], constants) - sum(reformat_operand(op, constants) for op in operands[1:])
+        if len(evaluated_operands) == 1:
+            return -evaluated_operands[0]
+        return evaluated_operands[0] - sum(evaluated_operands[1:])
     elif operator == '*':
         result = 1
-        for op in operands:
-            result *= reformat_operand(op, constants)
+        for op in evaluated_operands:
+            result *= op
         return result
     elif operator == '/':
-        if len(operands) != 2:
-            raise ValueError("Деление требует двух операндов!")
-        return reformat_operand(operands[0], constants) / reformat_operand(operands[1], constants)
+        if len(evaluated_operands) != 2:
+            raise ValueError("Division requires two operands.")
+        return evaluated_operands[0] / evaluated_operands[1]
+    else:
+        raise ValueError(f"Unsupported operator: {operator}")
 
-    raise ValueError(f"Неподдерживаемый оператор: {operator}")
 
-
-def reformat_operand(operand, constant):
+def reformat_operand(operand, constants):
     if operand.isdigit() or (operand[0] == '-' and operand[1:].isdigit()):
         return int(operand)
-    elif operand.replace('.','',1).isdigit():
+    elif operand.replace('.', '', 1).isdigit():
         return float(operand)
-    elif operand in constant:
-        return constant[operand]
-    elif operand.startswith('[') and operand.endswith(']'):
-        element = operand[1:-1].split(',')
-        elements = [reformat_operand(elem.strip(),constant) for elem in element]
-        return elements
-    elif operand.startswith('{') and operand.endswith('}'):
-        element = operand[1:-1].split(',')
-        elements = [reformat_operand(elem.strip(),constant) for elem in element]
-        return elements
+    elif operand in constants:
+        return constants[operand]
+    elif operand.startswith(".[") and operand.endswith("]."):
+        expr = operand[2:-2]
+        return reformat_expr(expr, constants)
+    elif operand.startswith("[") and operand.endswith("]"):
+        elements = operand[1:-1].split(",")
+        return [reformat_operand(elem.strip(), constants) for elem in elements]
+    elif operand.startswith("{") and operand.endswith("}"):
+        elements = operand[1:-1].split(",")
+        return [reformat_operand(elem.strip(), constants) for elem in elements]
     else:
-        raise ValueError(f"Неизвестный операнд: {operand}")
+        raise ValueError(f"Unknown operand: {operand}")
 
-
-def preprocess(input_string, constants):
-    lines = input_string.split('\n')
-    processed_lines = []
-    for line in lines:
-        match_expression = re.findall(r'\.\\[(.+?)\\]\.', line)
-        for expression in match_expression:
-            try:
-                result = reformat_expr(expression, constants)
-                line = line.replace(f'.[{expression}].', json.dumps(result))
-            except (ValueError, TypeError) as e:
-                raise ValueError(f"Ошибка вычисления выражения вне JSON: {e}")
-        processed_lines.append(line)
-
-    processed_string = "\n".join(processed_lines)
-
-    data = json.loads(processed_string)
-    if "constants" in data:
-        for name, value_str in data["constants"].items():
-            if isinstance(value_str, str) and value_str.startswith(".["):
-                try:
-                    value = reformat_expr(value_str[2:-2], constants)
-                    constants[name] = value
-                except (ValueError, TypeError) as e:
-                    raise ValueError(f"Ошибка вычисления константного выражения: {e}")
-            else:
-                constants[name] = value_str
-
-        del data["constants"]
-
-    return json.dumps(data), constants
 
 def format_value(val):
     if isinstance(val, list):
-        return json.dumps(val)
-    elif isinstance(val, (int,float)):
+        elements = ", ".join(format_value(elem) for elem in val)
+        return f"{{{elements}}}"
+    elif isinstance(val, (int, float)):
         return str(val)
     elif isinstance(val, str):
         return f'"{val}"'
     else:
-        raise ValueError(f"Недопустимый тип значения: {type(val)}")
+        raise ValueError(f"Unsupported value type: {type(val)}")
 
-def read_json(data, constants):
-    lines = []
+
+def collect_configurations(data, parent_key="", configurations=None):
+    if configurations is None:
+        configurations = []
     for key, value in data.items():
+        if not re.match(r'^[_a-zA-Z]+$', key):
+            raise ValueError(f"Invalid key name: {key}")
         if isinstance(value, dict):
-            nested_lines = read_json(value, constants)
-            lines.extend(nested_lines)
-        elif key in constants:
-            continue
-        elif isinstance(value, list):
-            lines.append(f"{key} {format_value(value)};")
-        elif isinstance(value, (int, float)):
-            lines.append(f"{key} {value};")
+            new_key = f"{parent_key}.{key}" if parent_key else key
+            collect_configurations(value, new_key, configurations)
         else:
-            lines.append(f"{key} \"{value}\";")
-    return lines
+            final_key = f"{parent_key}.{key}" if parent_key else key
+            configurations.append((final_key, value))
+    return configurations
 
 
-def parse_json(json_data, constants):
-    try:
-        data = json.loads(json_data)
-        if isinstance(data, dict):
-            return read_json(data, constants)
-        else:
-            raise ValueError("Входные данные должны быть JSON-объектом.")
+def resolve_expressions(data, constants):
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if isinstance(value, dict):
+                resolve_expressions(value, constants)
+            elif isinstance(value, str) and value.startswith(".[") and value.endswith("]."):
+                expr = value[2:-2]
+                try:
+                    data[key] = reformat_expr(expr, constants)
+                except Exception as e:
+                    raise ValueError(f"Error evaluating expression for {key}: {e}")
+    elif isinstance(data, list):
+        for i, value in enumerate(data):
+            if isinstance(value, dict):
+                resolve_expressions(value, constants)
+            elif isinstance(value, str) and value.startswith(".[") and value.endswith("]."):
+                expr = value[2:-2]
+                try:
+                    data[i] = reformat_expr(expr, constants)
+                except Exception as e:
+                    raise ValueError(f"Error evaluating expression in list: {e}")
 
-    except json.JSONDecodeError as x:
-        raise ValueError(f"Некорректный JSON: {x}")
+
+def preprocess(input_data, constants):
+    data = json.loads(input_data)
+    if "constants" in data:
+        constants_data = data["constants"]
+        for name, value in constants_data.items():
+            if isinstance(value, str) and value.startswith(".[") and value.endswith("]."):
+                expr = value[2:-2]
+                try:
+                    constants[name] = reformat_expr(expr, constants)
+                except Exception as e:
+                    raise ValueError(f"Error evaluating constant {name}: {e}")
+            else:
+                constants[name] = value
+        del data["constants"]
+    resolve_expressions(data, constants)
+    configurations = collect_configurations(data)
+    output_lines = []
+    for name, value in constants.items():
+        output_lines.append(f"{name} is {format_value(value)};")
+    for key, value in configurations:
+        output_lines.append(f"{key} {format_value(value)};")
+    return output_lines
 
 
-##Отсюда идут тесты
 class TestJsonParser(unittest.TestCase):
-
-    def test_reformat_expr(self):
-        constants = {"a": 5, "b": 2}
-        self.assertEqual(reformat_expr("+ 1 2 3", constants), 6)
-        self.assertEqual(reformat_expr("- 5 2", constants), 3)
-        self.assertEqual(reformat_expr("- 5", constants), -5)
-        self.assertEqual(reformat_expr("* 2 3", constants), 6)
-        self.assertEqual(reformat_expr("/ 6 2", constants), 3)
-        self.assertEqual(reformat_expr("sort [3 1 2]", constants), [1, 2, 3])
-        self.assertEqual(reformat_expr("+ a b", constants), 7)
-        with self.assertRaisesRegex(ValueError, "Sort работает только с"):
-            reformat_expr("sort 5", constants)
-        with self.assertRaisesRegex(ValueError, "Деление требует двух"):
-            reformat_expr("/", constants)
-
-
-    def test_reformat_operand(self):
-        constants = {"a": 5}
-        self.assertEqual(reformat_operand("1", constants), 1)
-        self.assertEqual(reformat_operand("3.14", constants), 3.14)
-        self.assertEqual(reformat_operand("-2", constants), -2)
-        self.assertEqual(reformat_operand("a", constants), 5)
-        self.assertEqual(reformat_operand("[1, 2, 3]", constants), [1, 2, 3])
-        with self.assertRaisesRegex(ValueError, "Неизвестный операнд"):
-            reformat_operand("b", constants)
+    def test_reformat_expr_operations(self):
+        constants = {"a": 5, "b": 10}
+        self.assertEqual(reformat_expr("+ a b", constants), 15)
+        self.assertEqual(reformat_expr("- b a", constants), 5)
+        self.assertEqual(reformat_expr("* a 3", constants), 15)
+        self.assertEqual(reformat_expr("/ b a", constants), 2)
+        self.assertEqual(reformat_expr("sort {3, 1, 2}", constants), [1, 2, 3])
 
 
 
+    def test_sort_with_expressions(self):
+        constants = {"a": 5, "b": 10}
+        expr = "sort {.[+ a 2]., b, .[- b a].}"
+        self.assertEqual(reformat_expr(expr, constants), [5, 7, 10])
 
-    def test_preprocess(self):
+    def test_invalid_key_names(self):
+        json_string = '{"1key": "value"}'
         constants = {}
-        input_string = '{"a": .[1+2]. , "b": .[4/2].,"c":".[sort [3,1,2]]."}'
-        result, constants = preprocess(input_string, constants)
-        self.assertEqual(json.loads(result), {"a": 3, "b": 2, "c": [1, 2, 3]})
+        with self.assertRaisesRegex(ValueError, "Invalid key name"):
+            preprocess(json_string, constants)
 
-
-        input_string = '{"constants": {"c": .[5*2].}, "a": .[c+1].}'
-        result, constants = preprocess(input_string, constants)
-        self.assertEqual(json.loads(result), {"a": 11})
-
-
-
-    def test_parse_json(self):
-        constants = {"PI": 3.14159}
-        json_string = '{"name": "Booba", "age": 30, "PI": 3.14, "city":"Moscow"}'
-        result = parse_json(json_string, constants)
-        self.assertEqual(result, ['name "Booba";', 'age 30;', 'city "Moscow";'])
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "test":
         del sys.argv[1]
         unittest.main()
     else:
-        json_input = sys.stdin.read()
-        constants = {}
-
-        try:
-            preprocessed_json, constants = preprocess(json_input, constants)
-            output_lines = parse_json(preprocessed_json, constants)
-
-            for key, value in constants.items():
-                print(f"{key} is {format_value(value)};")
-
-            for line in output_lines:
-                print(line)
-
-        except (ValueError, json.JSONDecodeError) as x:
-            print(f"Ошибка: {x}", file=sys.stderr)
+        if len(sys.argv) > 1:
+            for file_path in sys.argv[1:]:
+                try:
+                    with open(file_path, 'r') as file:
+                        json_input = file.read()
+                    constants = {}
+                    output_lines = preprocess(json_input, constants)
+                    for line in output_lines:
+                        print(line)
+                except FileNotFoundError:
+                    print(f"Error: File not found - {file_path}", file=sys.stderr)
+                except json.JSONDecodeError as e:
+                    print(f"Error: Invalid JSON in file - {file_path}: {e}", file=sys.stderr)
+                except Exception as e:
+                    print(f"Error processing file - {file_path}: {e}", file=sys.stderr)
+        else:
+            try:
+                json_input = sys.stdin.read()
+                constants = {}
+                output_lines = preprocess(json_input, constants)
+                for line in output_lines:
+                    print(line)
+            except json.JSONDecodeError as e:
+                print(f"Error: Invalid JSON input - {e}", file=sys.stderr)
+            except Exception as e:
+                print(f"Error processing input: {e}", file=sys.stderr)
